@@ -14,11 +14,9 @@ import faiss
 from langchain_community.docstore.in_memory import InMemoryDocstore
 from langchain_community.vectorstores import FAISS
 import logging
-
-#huggingface 로그인
-from huggingface_hub import login
-
-login()
+from langchain_community.document_loaders import PyPDFLoader
+import uuid
+from datetime import datetime, timedelta
 
 
 
@@ -36,6 +34,60 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 
 #I. Streamlit 관련
+# Step 1: Generate a unique identifier for each user
+user_id = str(uuid.uuid4())
+st.session_state['user_id'] = user_id
+
+# Step 2: Initialize chat history and timestamp for the user
+if 'chat_histories' not in st.session_state:
+    st.session_state['chat_histories'] = {}
+if 'last_activity' not in st.session_state:
+    st.session_state['last_activity'] = {}
+
+st.session_state['chat_histories'][user_id] = []
+st.session_state['last_activity'][user_id] = datetime.now()  # Initialize timestamp
+
+# Step 3: Function to clean up inactive sessions
+def cleanup_sessions(timeout_minutes=60): #마지막 활동 시간이 timeout_minutes 이상인 사용자 세션 제거
+    current_time = datetime.now()
+    inactive_users = []
+    
+    # Identify inactive users
+    for user, last_active in st.session_state['last_activity'].items():
+        if current_time - last_active > timedelta(minutes=timeout_minutes):
+            inactive_users.append(user)
+    
+    # Remove inactive users' sessions
+    for user in inactive_users:
+        del st.session_state['chat_histories'][user]
+        del st.session_state['last_activity'][user]
+
+# Call the cleanup function to remove old sessions
+cleanup_sessions(timeout_minutes=60) #TODO : 주기적 세션 정리 필요
+
+# Step 4: Functions to save and send messages
+def save_message(message, role):
+    st.session_state['chat_histories'][user_id].append((role, message))
+    st.session_state['last_activity'][user_id] = datetime.now()  # 메시지 보낼 경우, 마지막 활동 시간 업데이트
+
+def send_message(message, role, save=True):
+    with st.chat_message(role):
+        st.markdown(message)
+        if save:
+            save_message(message, role)
+            
+# # Example usage:
+# user_message = st.text_input("You: ", key="user_input")
+# if st.button("Send"):
+#     send_message(user_message, "user")
+#     llm_response = "This is a response from the LLM."
+#     send_message(llm_response, "llm")
+
+# # Display chat history
+# for role, message in st.session_state['chat_histories'][user_id]:
+#     with st.chat_message(role):
+#         st.markdown(message)
+
 st.title('RAG 시스템')
 
 # 모델 선택 및 API Key 입력(필요시)
@@ -55,7 +107,7 @@ os.environ["LANGCHAIN_PROJECT"] = "사내 LLM 구축 프로젝트"
 
 #Prompt 생성
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
-
+#TODO: 사용자의 Input을 받도록 유도하여 보고서를 작성하는 Prompt 작성 필요 -> 이 부분은 LangGraph 활용
 prompt =  ChatPromptTemplate.from_messages(
   [
     ("system", """당신은 느린 학습자 관련 교육 전문가입니다. 당신은 느린 학습자 관련 질문을 받고, 이에 대한 전문적인 답변을 제공합니다.
@@ -84,42 +136,52 @@ embeddings_model = HuggingFaceEmbeddings(
     encode_kwargs={'normalize_embeddings': True},
 )
 
-@st.cache_data(show_spinner="파일 로딩 중....")
-def process_and_embed_file(file):
-    # Save the uploaded file to disk
-    file_path = os.path.join(UPLOADS_DIR, file.name)
-    with open(file_path, 'wb') as f:
-        f.write(file.read())
+#OutputParer
+from langchain.schema import BaseOutputParser
 
-    # Load and split the document
-    from langchain_community.document_loaders import PyPDFLoader
+class NewLineOutputParser(BaseOutputParser): #TODO : PydanticOutputParser를 사용한 출력 형식 지정
+    def parse(self, output):
+        #'\n' -> '  \n'으로 변환
+        return output.replace('\n', '  \n')
+parser = NewLineOutputParser()
+
+@st.cache_data(show_spinner="파일 임베딩 중...")
+def process_and_embed_file(file): 
+  #TODO: FAISS indexing 방법 고려. 
+  #방법 1. Store Embedded Data from Multiple Files Together. -> 가장 간편하지만, 데이터가 많아질 경우, 개별 파일에 대한 관리가 어려움.
+  #방법 2. Separate Index for Each File, Unified Retriever -> FAISS는 multiple index searching을 지원하지 않기에, Aggregator 기능이 있는 custom retriever를 만들어야 함.
+  # -> 일단 방법 1로 진행. 추후 방법 2로 변경 고려.
+  
+    # Load the existing FAISS index if it exists
+    cache_path = os.path.join(CACHE_DIR, "combined_index") #combined_index라는 이름으로 인덱스 저장 및 관리
+    if os.path.exists(cache_path):
+      vector_store = FAISS.load_local(
+          cache_path,
+          embeddings_model,
+          allow_dangerous_deserialization=True  # Pickle 파일을 FAISS Index로 deserialize하기 위해 필요
+      )
+    else:
+        index = faiss.IndexFlatL2(len(embeddings_model.embed_query("test")))  # IndexFlatL2 : L2 distance를 사용하는 flat index. IndexFlatIP : Inner product를 사용하는 flat index
+        vector_store = FAISS(
+          embedding_function=embeddings_model, 
+          index=index, 
+          docstore=InMemoryDocstore(), 
+          index_to_docstore_id={},
+          allow_dangerous_deserialization=True
+          )
+    
+    # Process new file
+    file_path = os.path.join(UPLOADS_DIR, file.name)
+    with open(file_path, 'wb') as f: #파일 저장
+        f.write(file.read())
+        
     loader = PyPDFLoader(file_path)
     documents = loader.load_and_split(text_splitter=text_splitter)
-
-    # Embed the split documents
     embeddings = embeddings_model.embed_documents([doc.page_content for doc in documents])
 
-    # Create FAISS index
-    import faiss
-    from langchain_community.docstore.in_memory import InMemoryDocstore
-    from langchain_community.vectorstores import FAISS
-    index = faiss.IndexFlatL2(len(embeddings[0]))
-
-    # Wrap FAISS in Langchain's FAISS vectorstore
-    vector_store = FAISS(
-        embedding_function=embeddings_model,
-        index=index,
-        docstore=InMemoryDocstore(),
-        index_to_docstore_id={},
-    )
-
-    # Add documents and embeddings to vector store
+    # Add new embeddings to the existing vector store
     vector_store.add_documents(documents=documents)
-
-    # Save the FAISS index locally
-    cache_path = os.path.join(CACHE_DIR, file.name.split('.')[0])
     vector_store.save_local(cache_path)
-
     return vector_store
 
 def format_documents(docs):
@@ -139,22 +201,18 @@ def load_vectorstore_from_cache(filename):
 # Streamlit UI
 with st.sidebar:
     st.title("PDF to FAISS Embedding")
-    file = st.file_uploader("Upload a PDF file", type=["pdf"])
+    file = st.file_uploader("PDF 파일을 업로드 해주세요", type=["pdf"])
 
     if file:
-        vector_store = process_and_embed_file(file)
-        st.success(f"File '{file.name}' has been processed and embedded successfully!")
-    else:
-        # Load an existing vectorstore if no file is uploaded
-        if os.path.exists(os.path.join(CACHE_DIR, "test")):
-            vector_store = load_vectorstore_from_cache("test")
-            st.info("Loaded existing vectorstore from cache.")
-        else:
-            st.warning("No file uploaded and no existing vectorstore found.")
-            vector_store = None
-
-#LLM model
-
+      vectorstore = process_and_embed_file(file) #
+      st.success(f"업로드한 파일 '{file.name}' 이 성공적 임베딩 되었습니다. ")
+    else :
+      vectorstore = FAISS.load_local(os.path.join(CACHE_DIR, "combined_index"), embeddings_model, allow_dangerous_deserialization=True)
+      st.success(f"기존 FAISS 인덱스가 성공적으로 로드되었습니다. ")
+      
+    retriever =  vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 4})
+    
+#LLM 모델 선택
 ## Openai-GPT-4o
 if selected_model == 'Openai-GPT-4o' and openai_api_key:    
     llm = ChatOpenAI(
@@ -162,6 +220,7 @@ if selected_model == 'Openai-GPT-4o' and openai_api_key:
       api_key=openai_api_key,
       verbose=True,
       max_tokens= 1500,
+      streaming=True
       )
     
     set_llm_cache(InMemoryCache()) 
@@ -172,41 +231,17 @@ if selected_model == 'Openai-GPT-4o' and openai_api_key:
       verbose=True
     )
     
-            # User input handling
-    if user_input := st.chat_input("질문을 입력하세요"):
-        # Initialize retriever for the FAISS vectorstore
-        retriever = vector_store.as_retriever(search_type="mmr", search_kwargs={"k": 2})
-        
-        # Retrieve relevant documents
-        retrieved_docs = retriever.invoke(user_input)
-        
-        # Debugging: Check retrieved documents
-        for doc in retrieved_docs:
-            print(f"Retrieved Document Content: {doc.page_content}")
-            
-        # Format the retrieved documents as context
-        context = format_documents(retrieved_docs)
-
-        # Use the prompt template to prepare the LLM input
-        inputs = {
-            "context": context,
-            "question": user_input
-        }
-        
-        # Prepare the chain using prompt and LLM
-        chain = prompt | llm
-        
-        # Invoke the chain with formatted input
-        response = chain.invoke(inputs)
-        st.write(response)
-
 ## Google-Gemma-2-9b
-if selected_model == 'Google-Gemma-2-9b':
+elif selected_model == 'Google-Gemma-2-9b':
   #load the model using huggingface 
   from langchain_huggingface import HuggingFacePipeline
+  
+  #TODO: 허깅페이스 로그인 혹은 토큰을 사용한 인증 구현 필요
+  
   llm = HuggingFacePipeline.from_model_id(
     model_id = "google/gemma-2-9b",
     task = "text-generation",
+  
   )
   
   set_llm_cache(InMemoryCache())
@@ -217,30 +252,32 @@ if selected_model == 'Google-Gemma-2-9b':
     verbose=True
   )
   
-  # User input handling
-  if user_input := st.text_input("질문을 입력하세요"):
-    # Initialize retriever for the FAISS vectorstore
-    retriever = vector_store.as_retriever(search_type="mmr", search_kwargs={"k": 2}) #TODO: similarity(default)/mmr/similarity_score_threshold 중 어느 것을 사용할지 테스팅 필요
-    
-    # Retrieve relevant documents
-    retrieved_docs = retriever.invoke(user_input)
-    
-    # Debugging: Check retrieved documents
-    for doc in retrieved_docs:
-        print(f"Retrieved Document Content: {doc.page_content}")
-        
-    # Format the retrieved documents as context
-    context = format_documents(retrieved_docs)
+if 'llm' in globals() and llm:
+    if user_input := st.chat_input("질문을 입력하세요"):
+        # Save and display user input
+        send_message(user_input, 'user')
 
-    # Use the prompt template to prepare the LLM input
-    inputs = {
-        "context": context,
-        "question": user_input
-    }
-    
-    # Prepare the chain using prompt and LLM
-    chain = prompt | llm
-    
-    # Invoke the chain with formatted input
-    response = chain.invoke(inputs)
-    st.write(response)
+        # Retrieve documents based on user input
+        retrieved_docs = retriever.invoke(user_input) # Retrieval step
+        
+        # Debugging: Check retrieved documents
+        for doc in retrieved_docs:
+            print(f"Retrieved Document Content: {doc.page_content}")
+        
+        # Format the retrieved documents as context
+        context = format_documents(retrieved_docs)
+
+        # Prepare inputs for the LLM
+        inputs = {
+            "context": context,
+            "question": user_input
+        }
+        
+        # Prepare the chain using prompt and LLM
+        chain = prompt | llm | parser
+        
+        # Invoke the chain with formatted input
+        response = chain.stream(inputs)
+        
+        # Save and display LLM response
+        send_message(response, 'llm')
