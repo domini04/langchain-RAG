@@ -39,12 +39,12 @@ user_id = str(uuid.uuid4())
 st.session_state['user_id'] = user_id
 
 # Step 2: Initialize chat history and timestamp for the user
-if 'chat_histories' not in st.session_state:
-    st.session_state['chat_histories'] = {}
+if 'chat_history' not in st.session_state:
+    st.session_state['chat_history'] = {}
 if 'last_activity' not in st.session_state:
     st.session_state['last_activity'] = {}
 
-st.session_state['chat_histories'][user_id] = []
+st.session_state['chat_history'][user_id] = []
 st.session_state['last_activity'][user_id] = datetime.now()  # Initialize timestamp
 
 # Step 3: Function to clean up inactive sessions
@@ -59,7 +59,7 @@ def cleanup_sessions(timeout_minutes=60): #마지막 활동 시간이 timeout_mi
     
     # Remove inactive users' sessions
     for user in inactive_users:
-        del st.session_state['chat_histories'][user]
+        del st.session_state['chat_history'][user]
         del st.session_state['last_activity'][user]
 
 # Call the cleanup function to remove old sessions
@@ -67,7 +67,7 @@ cleanup_sessions(timeout_minutes=60) #TODO : 주기적 세션 정리 필요
 
 # Step 4: Functions to save and send messages
 def save_message(message, role):
-    st.session_state['chat_histories'][user_id].append((role, message))
+    st.session_state['chat_history'][user_id].append((role, message))
     st.session_state['last_activity'][user_id] = datetime.now()  # 메시지 보낼 경우, 마지막 활동 시간 업데이트
 
 def send_message(message, role, save=True):
@@ -75,7 +75,11 @@ def send_message(message, role, save=True):
         st.markdown(message)
         if save:
             save_message(message, role)
-            
+
+def paint_history():
+  for message in st.session_state['chat_history'][user_id]:
+    send_message(message[1], message[0], save=False)
+      
 # # Example usage:
 # user_message = st.text_input("You: ", key="user_input")
 # if st.button("Send"):
@@ -84,14 +88,15 @@ def send_message(message, role, save=True):
 #     send_message(llm_response, "llm")
 
 # # Display chat history
-# for role, message in st.session_state['chat_histories'][user_id]:
+# for role, message in st.session_state['chat_history'][user_id]:
 #     with st.chat_message(role):
 #         st.markdown(message)
 
 st.title('RAG 시스템')
 
 # 모델 선택 및 API Key 입력(필요시)
-st.subheader('모델 및 파라미터 설정')
+st.subheader('느린학습자 관련 RAG')
+st.markdown("업로드된 PDF 파일 내용에 국한된 답변을 생성하는 RAG 시스템입니다.")
 selected_model = st.sidebar.selectbox('LLM 모델을 선택하세요', ['Openai-GPT-4o', 'Google-Gemma-2-9b', 'Meta-Llama-3.1-8b'], key='selected_model')
 if selected_model == 'Openai-GPT-4o':
     with st.sidebar:
@@ -211,7 +216,26 @@ with st.sidebar:
       st.success(f"기존 FAISS 인덱스가 성공적으로 로드되었습니다. ")
       
     retriever =  vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 4})
+
+#Callback Handler 설정
+from langchain_core.callbacks.base import BaseCallbackHandler
+
+class ChatCallbackHandler(BaseCallbackHandler):
+  message = ""
+  
+  def on_llm_start(self, *args, **kwargs):
+    self.message_box = st.empty()
     
+  def on_llm_end(self, *args, **kwargs):
+    save_message(self.message, 'ai')
+    
+  def on_llm_new_token(self, token, *args, **kwargs):
+  #   print(f"LLM 토큰 생성: {token}")
+    self.message += token
+    self.message_box.markdown(self.message)
+  
+
+
 #LLM 모델 선택
 ## Openai-GPT-4o
 if selected_model == 'Openai-GPT-4o' and openai_api_key:    
@@ -220,7 +244,8 @@ if selected_model == 'Openai-GPT-4o' and openai_api_key:
       api_key=openai_api_key,
       verbose=True,
       max_tokens= 1500,
-      streaming=True
+      streaming=True,
+      callbacks=[ChatCallbackHandler()],
       )
     
     set_llm_cache(InMemoryCache()) 
@@ -252,7 +277,9 @@ elif selected_model == 'Google-Gemma-2-9b':
     verbose=True
   )
   
+# LLM integration with chat history
 if 'llm' in globals() and llm:
+    paint_history()
     if user_input := st.chat_input("질문을 입력하세요"):
         # Save and display user input
         send_message(user_input, 'user')
@@ -260,9 +287,9 @@ if 'llm' in globals() and llm:
         # Retrieve documents based on user input
         retrieved_docs = retriever.invoke(user_input) # Retrieval step
         
-        # Debugging: Check retrieved documents
-        for doc in retrieved_docs:
-            print(f"Retrieved Document Content: {doc.page_content}")
+        ## Debugging: Check retrieved documents
+        # for doc in retrieved_docs:
+            # print(f"Retrieved Document Content: {doc.page_content}")
         
         # Format the retrieved documents as context
         context = format_documents(retrieved_docs)
@@ -276,8 +303,5 @@ if 'llm' in globals() and llm:
         # Prepare the chain using prompt and LLM
         chain = prompt | llm | parser
         
-        # Invoke the chain with formatted input
-        response = chain.stream(inputs)
-        
-        # Save and display LLM response
-        send_message(response, 'llm')
+        with st.chat_message("ai"):
+          response = chain.invoke(inputs)
