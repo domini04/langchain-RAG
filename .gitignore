@@ -4,3 +4,4 @@ uploads/test1.pdf
 test.pdf
 cache/*
 uploads/*
+gpu_test.py

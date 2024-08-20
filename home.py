@@ -97,7 +97,7 @@ st.title('RAG 시스템')
 # 모델 선택 및 API Key 입력(필요시)
 st.subheader('느린학습자 관련 RAG')
 st.markdown("업로드된 PDF 파일 내용에 국한된 답변을 생성하는 RAG 시스템입니다.")
-selected_model = st.sidebar.selectbox('LLM 모델을 선택하세요', ['Openai-GPT-4o', 'Google-Gemma-2-9b', 'Meta-Llama-3.1-8b'], key='selected_model')
+selected_model = st.sidebar.selectbox('LLM 모델을 선택하세요', ['Openai-GPT-4o', 'Google-Gemma-2', ], key='selected_model')
 if selected_model == 'Openai-GPT-4o':
     with st.sidebar:
         openai_api_key = st.text_input('Openai API Key를 입력해주세요')
@@ -127,8 +127,8 @@ prompt =  ChatPromptTemplate.from_messages(
 # Initialize the text splitter
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1000,
-    chunk_overlap=100,
+    chunk_size=500,
+    chunk_overlap=50,
     length_function=len,
     is_separator_regex=False,
 )
@@ -137,9 +137,12 @@ text_splitter = RecursiveCharacterTextSplitter(
 from langchain_community.embeddings import HuggingFaceEmbeddings
 embeddings_model = HuggingFaceEmbeddings(
     model_name='BAAI/bge-m3',
-    model_kwargs={'device': 'cpu'},
+    model_kwargs={'device': 'cuda'},
     encode_kwargs={'normalize_embeddings': True},
+    # multi_process=True,
+    show_progress=True,
 )
+
 
 #OutputParer
 from langchain.schema import BaseOutputParser
@@ -172,7 +175,7 @@ def process_and_embed_file(file):
           index=index, 
           docstore=InMemoryDocstore(), 
           index_to_docstore_id={},
-          allow_dangerous_deserialization=True
+          # allow_dangerous_deserialization=True
           )
     
     # Process new file
@@ -215,7 +218,7 @@ with st.sidebar:
       vectorstore = FAISS.load_local(os.path.join(CACHE_DIR, "combined_index"), embeddings_model, allow_dangerous_deserialization=True)
       st.success(f"기존 FAISS 인덱스가 성공적으로 로드되었습니다. ")
       
-    retriever =  vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 4})
+    retriever =  vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 1})
 
 #Callback Handler 설정
 from langchain_core.callbacks.base import BaseCallbackHandler
@@ -230,7 +233,7 @@ class ChatCallbackHandler(BaseCallbackHandler):
     save_message(self.message, 'ai')
     
   def on_llm_new_token(self, token, *args, **kwargs):
-  #   print(f"LLM 토큰 생성: {token}")
+    print(f"LLM 토큰 생성: {token}")
     self.message += token
     self.message_box.markdown(self.message)
   
@@ -257,17 +260,24 @@ if selected_model == 'Openai-GPT-4o' and openai_api_key:
     )
     
 ## Google-Gemma-2-9b
-elif selected_model == 'Google-Gemma-2-9b':
+elif selected_model == 'Google-Gemma-2':
   #load the model using huggingface 
   from langchain_huggingface import HuggingFacePipeline
-  
   #TODO: 허깅페이스 로그인 혹은 토큰을 사용한 인증 구현 필요
-  
-  llm = HuggingFacePipeline.from_model_id(
-    model_id = "google/gemma-2-9b",
-    task = "text-generation",
-  
-  )
+  if not llm :
+    llm = HuggingFacePipeline.from_model_id(
+      model_id = "google/gemma-2-2b-it",
+      task = "text-generation",
+      verbose=True,
+      callbacks=[ChatCallbackHandler()],
+      pipeline_kwargs = {
+        "max_new_tokens": 1000,
+      }
+    )
+
+  # Prepare the chain using prompt and LLM, create it once
+  chain = prompt | llm | parser
+
   
   set_llm_cache(InMemoryCache())
   
@@ -277,31 +287,24 @@ elif selected_model == 'Google-Gemma-2-9b':
     verbose=True
   )
   
+
 # LLM integration with chat history
 if 'llm' in globals() and llm:
     paint_history()
     if user_input := st.chat_input("질문을 입력하세요"):
         # Save and display user input
         send_message(user_input, 'user')
-
         # Retrieve documents based on user input
-        retrieved_docs = retriever.invoke(user_input) # Retrieval step
-        
-        ## Debugging: Check retrieved documents
-        # for doc in retrieved_docs:
-            # print(f"Retrieved Document Content: {doc.page_content}")
-        
+        retrieved_docs = retriever.invoke(user_input)
         # Format the retrieved documents as context
         context = format_documents(retrieved_docs)
-
         # Prepare inputs for the LLM
         inputs = {
             "context": context,
             "question": user_input
         }
-        
-        # Prepare the chain using prompt and LLM
-        chain = prompt | llm | parser
-        
+
+
         with st.chat_message("ai"):
-          response = chain.invoke(inputs)
+            response = chain.invoke(inputs)
+            st.markdown(response)
