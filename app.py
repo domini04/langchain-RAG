@@ -138,7 +138,7 @@ class NewLineOutputParser(BaseOutputParser): #TODO : PydanticOutputParser를 사
         return output.replace('\n', '  \n')
 parser = NewLineOutputParser()
 
-@st.cache_data(show_spinner="파일 임베딩 중...") #TODO: 파일이 임베딩 된 이후, streamlit에서 해당 파일을 제거하는 처리 필요
+@st.cache_data(show_spinner="파일 임베딩 중...")
 def process_and_embed_file(file): 
   #TODO: FAISS indexing 방법 고려. 
   #방법 1. Store Embedded Data from Multiple Files Together. -> 가장 간편하지만, 데이터가 많아질 경우, 개별 파일에 대한 관리가 어려움.
@@ -225,40 +225,40 @@ class ChatCallbackHandler(BaseCallbackHandler):
   
 #LLM 모델 선택
 ## Openai-GPT-4o
-# if selected_model == 'Openai-GPT-4o' and openai_api_key:    
-#     llm = ChatOpenAI(
-#       model="gpt-4o", 
-#       api_key=openai_api_key,
-#       verbose=True,
-#       max_tokens= 1500,
-#       streaming=True,
-#       callbacks=[ChatCallbackHandler()],
-#       )
+if selected_model == 'Openai-GPT-4o' and openai_api_key:    
+    llm = ChatOpenAI(
+      model="gpt-4o", 
+      api_key=openai_api_key,
+      verbose=True,
+      max_tokens= 1500,
+      streaming=True,
+      callbacks=[ChatCallbackHandler()],
+      )
     
-#     set_llm_cache(InMemoryCache()) 
+    set_llm_cache(InMemoryCache()) 
     
-#     conversation = ConversationChain(
-#       llm=llm,
-#       memory=ConversationBufferWindowMemory(k=3),
-#       verbose=True
-#     )
-#     chain = prompt | llm | parser
+    conversation = ConversationChain(
+      llm=llm,
+      memory=ConversationBufferWindowMemory(k=3),
+      verbose=True
+    )
+    chain = prompt | llm | parser
     
-# ## Google-Gemma-2-9b
-# elif selected_model == 'Google-Gemma-2':
-#   #load the model using huggingface 
-#   from langchain_huggingface import HuggingFacePipeline
-#   #TODO: 허깅페이스 로그인 혹은 토큰을 사용한 인증 구현 필요
-#   if not llm :
-#     llm = HuggingFacePipeline.from_model_id(
-#       model_id = "google/gemma-2-2b-it",
-#       task = "text-generation",
-#       verbose=True,
-#       callbacks=[ChatCallbackHandler()],
-#       pipeline_kwargs = {
-#         "max_new_tokens": 1000,
-#       }
-#     )
+## Google-Gemma-2-9b
+elif selected_model == 'Google-Gemma-2':
+  #load the model using huggingface 
+  from langchain_huggingface import HuggingFacePipeline
+  #TODO: 허깅페이스 로그인 혹은 토큰을 사용한 인증 구현 필요
+  if not llm :
+    llm = HuggingFacePipeline.from_model_id(
+      model_id = "google/gemma-2-2b-it",
+      task = "text-generation",
+      verbose=True,
+      callbacks=[ChatCallbackHandler()],
+      pipeline_kwargs = {
+        "max_new_tokens": 1000,
+      }
+    )
 
   set_llm_cache(InMemoryCache())
   
@@ -271,45 +271,6 @@ class ChatCallbackHandler(BaseCallbackHandler):
   chain = prompt | llm | parser
 
 #TODO : Reranker 추가 필요
-
-#TODO : 싱글턴 방식의 llm 객체 생성 방식 변경 필요
-class LLMManager:
-    _instance = None
-
-    @staticmethod
-    def get_llm(model_name=None, model_params=None):
-        if LLMManager._instance is None:
-            if model_name == "Openai-GPT-4o":
-                api_key = model_params.get("api_key")
-                if not api_key:
-                    st.error("Openai API Key가 필요합니다.")
-                    raise ValueError("API key is required for GPT-4o")
-                LLMManager._instance = ChatOpenAI(
-                    model="gpt-4o",
-                    api_key=api_key,
-                    verbose=True,
-                    max_tokens=1500,
-                    streaming=True,
-                    callbacks=[ChatCallbackHandler()],
-                )
-            elif model_name == "Google-Gemma-2":
-                LLMManager._instance = HuggingFacePipeline.from_model_id(
-                    model_id="google/gemma-2-2b-it",
-                    task="text-generation",
-                    verbose=True,
-                    callbacks=[ChatCallbackHandler()],
-                    pipeline_kwargs={"max_new_tokens": 1000},
-                )
-            # Add more model initialization as needed
-
-        return LLMManager._instance
-
-# Usage in your application
-llm = LLMManager.get_llm(
-    model_name=selected_model, 
-    model_params={"api_key": openai_api_key} if selected_model == "Openai-GPT-4o" else {}
-)
-
 
 # LLM integration with chat history
 if 'llm' in globals() and llm:

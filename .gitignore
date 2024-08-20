@@ -5,3 +5,4 @@ test.pdf
 cache/*
 uploads/*
 gpu_test.py
+cache_backup/*
