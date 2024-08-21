@@ -17,6 +17,9 @@ import logging
 from langchain_community.document_loaders import PyPDFLoader
 import uuid
 from datetime import datetime, timedelta
+from langchain_community.llms import HuggingFacePipeline
+from langchain_community.llms.vllm import VLLM
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 #환경설정
 ENV_PATH = './.env'
@@ -112,8 +115,8 @@ prompt =  ChatPromptTemplate.from_messages( #TODO : 추후 퓨샷 템플릿으�
 # Initialize the text splitter
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=500,
-    chunk_overlap=50,
+    chunk_size=800,
+    chunk_overlap=80,
     length_function=len,
     is_separator_regex=False,
 )
@@ -122,7 +125,8 @@ text_splitter = RecursiveCharacterTextSplitter(
 from langchain_community.embeddings import HuggingFaceEmbeddings
 embeddings_model = HuggingFaceEmbeddings(
     model_name='BAAI/bge-m3',
-    model_kwargs={'device': 'cuda'},
+    # model_kwargs={'device': 'cuda'},  #GPU를 사용한 임베딩 옵션
+    model_kwargs={'device': 'cpu'},
     encode_kwargs={'normalize_embeddings': True},
     # multi_process=True,
     show_progress=True,
@@ -132,7 +136,7 @@ embeddings_model = HuggingFaceEmbeddings(
 #OutputParer
 from langchain.schema import BaseOutputParser
 
-class NewLineOutputParser(BaseOutputParser): #TODO : PydanticOutputParser를 사용한 출력 형식 지정
+class NewLineOutputParser(BaseOutputParser): #TODO : PydanticOutputParser를 사용한 출력 형식 지정 -> 추후 보고서 등 명확한 출력 형식이 필요한 경우 사용.
     def parse(self, output):
         #'\n' -> '  \n'으로 변환
         return output.replace('\n', '  \n')
@@ -201,10 +205,41 @@ with st.sidebar:
       vectorstore = process_and_embed_file(file) #
       st.success(f"업로드한 파일 '{file.name}' 이 성공적 임베딩 되었습니다. ")
     else :
-      vectorstore = FAISS.load_local(os.path.join(CACHE_DIR, "combined_index"), embeddings_model, allow_dangerous_deserialization=True)
+      vectorstore = FAISS.load_local(os.path.join(CACHE_DIR, "combined_index"), embeddings_model, allow_dangerous_deserialization=True) #해당 인덱스가 로딩된 FAISS 객체를 반환
       st.success(f"FAISS 인덱스가 성공적으로 로드되었습니다. ")
       
     retriever =  vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 3})
+    
+
+# Streamlit UI
+# with st.sidebar:
+#   st.title("PDF to FAISS Embedding")
+
+#   if 'embedded' not in st.session_state:
+#     st.session_state['embedded'] = False
+  
+#   file = st.file_uploader("PDF 파일을 업로드 해주세요", type=["pdf"])
+
+#   if file and not st.session_state['embedded']:
+#     file_path = os.path.join(UPLOADS_DIR, file.name)
+#     with open(file_path, 'wb') as f:
+#       f.write(file.read())
+    
+#     vectorstore = process_and_embed_file(file_path)
+    
+#     st.success(f"업로드한 파일 '{file.name}' 이 성공적으로 임베딩 되었습니다.")
+#     st.session_state['embedded'] = True  # Mark as embedded
+    
+#     # Remove the uploaded file from the UI and state
+#     st.session_state.pop('file_uploader', None)
+#     os.remove(file_path)  # Optional: delete the file from the server
+
+#   elif not file and not st.session_state['embedded']:
+#     vectorstore = FAISS.load_local(os.path.join(CACHE_DIR, "combined_index"), embeddings_model, allow_dangerous_deserialization=True)
+#     st.success("FAISS 인덱스가 성공적으로 로드되었습니다.")
+  
+#   retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 3})
+
 
 #Callback Handler 설정
 from langchain_core.callbacks.base import BaseCallbackHandler
@@ -219,104 +254,73 @@ class ChatCallbackHandler(BaseCallbackHandler):
     save_message(self.message, 'ai')
     
   def on_llm_new_token(self, token, *args, **kwargs):
-    print(f"LLM 토큰 생성: {token}")
+    # print(f"LLM 토큰 생성: {token}")
     self.message += token
     self.message_box.markdown(self.message)
   
-#LLM 모델 선택
-## Openai-GPT-4o
-# if selected_model == 'Openai-GPT-4o' and openai_api_key:    
-#     llm = ChatOpenAI(
-#       model="gpt-4o", 
-#       api_key=openai_api_key,
-#       verbose=True,
-#       max_tokens= 1500,
-#       streaming=True,
-#       callbacks=[ChatCallbackHandler()],
-#       )
-    
-#     set_llm_cache(InMemoryCache()) 
-    
-#     conversation = ConversationChain(
-#       llm=llm,
-#       memory=ConversationBufferWindowMemory(k=3),
-#       verbose=True
-#     )
-#     chain = prompt | llm | parser
-    
-# ## Google-Gemma-2-9b
-# elif selected_model == 'Google-Gemma-2':
-#   #load the model using huggingface 
-#   from langchain_huggingface import HuggingFacePipeline
-#   #TODO: 허깅페이스 로그인 혹은 토큰을 사용한 인증 구현 필요
-#   if not llm :
-#     llm = HuggingFacePipeline.from_model_id(
-#       model_id = "google/gemma-2-2b-it",
-#       task = "text-generation",
-#       verbose=True,
-#       callbacks=[ChatCallbackHandler()],
-#       pipeline_kwargs = {
-#         "max_new_tokens": 1000,
-#       }
-#     )
-
-  set_llm_cache(InMemoryCache())
-  
-  conversation = ConversationChain(
-    llm=llm,
-    memory=ConversationBufferWindowMemory(k=3),
-    verbose=True
-  )
-  
-  chain = prompt | llm | parser
 
 #TODO : Reranker 추가 필요
 
 #TODO : 싱글턴 방식의 llm 객체 생성 방식 변경 필요
 class LLMManager:
-    _instance = None
+  _instance = None
 
-    @staticmethod
-    def get_llm(model_name=None, model_params=None):
-        if LLMManager._instance is None:
-            if model_name == "Openai-GPT-4o":
-                api_key = model_params.get("api_key")
-                if not api_key:
-                    st.error("Openai API Key가 필요합니다.")
-                    raise ValueError("API key is required for GPT-4o")
-                LLMManager._instance = ChatOpenAI(
-                    model="gpt-4o",
-                    api_key=api_key,
-                    verbose=True,
-                    max_tokens=1500,
-                    streaming=True,
-                    callbacks=[ChatCallbackHandler()],
-                )
-            elif model_name == "Google-Gemma-2":
-                LLMManager._instance = HuggingFacePipeline.from_model_id(
-                    model_id="google/gemma-2-2b-it",
-                    task="text-generation",
-                    verbose=True,
-                    callbacks=[ChatCallbackHandler()],
-                    pipeline_kwargs={"max_new_tokens": 1000},
-                )
-            # Add more model initialization as needed
+  @staticmethod
+  def get_llm(model_name=None, model_params=None):
+    if LLMManager._instance is None:
+      if model_name == "Openai-GPT-4o":
+        api_key = model_params.get("api_key")
+        if not api_key:
+          raise ValueError("API key is required for GPT-4o")
+        LLMManager._instance = ChatOpenAI(
+          model="gpt-4o",
+          api_key=api_key,
+          verbose=True,
+          max_tokens=1500,
+          streaming=True,
+          callbacks=[ChatCallbackHandler()],
+        )
+      elif model_name == "Google-Gemma-2":
+        LLMManager._instance = HuggingFacePipeline.from_model_id(
+          model_id="google/gemma-2-2b-it",
+          task="text-generation",
+          verbose=True,
+          device_map='auto',
+          callbacks=[ChatCallbackHandler()],
+          pipeline_kwargs={"max_new_tokens": 1000},
+        ) 
 
-        return LLMManager._instance
+      # Add more model initialization as needed
 
-# Usage in your application
-llm = LLMManager.get_llm(
+    return LLMManager._instance
+
+#LLM 초기화
+llm = None
+if selected_model != "Openai-GPT-4o" or (selected_model == "Openai-GPT-4o" and 'openai_api_key' in globals()):
+  llm = LLMManager.get_llm(
     model_name=selected_model, 
     model_params={"api_key": openai_api_key} if selected_model == "Openai-GPT-4o" else {}
-)
-
-
+  )
+  
 # LLM integration with chat history
 if 'llm' in globals() and llm:
     paint_history()
     if user_input := st.chat_input("질문을 입력하세요"):
         # Save and display user input
         send_message(user_input, 'user')
+        
+        #TODO : Multi-Query Retriever 구현 -> 현재는 단일 리트리버만 지원
+        # #Multi-Query Retriever 구현
+        # from langchain.retrievers.multi_query import MultiQueryRetriever
+        # mq_retriever = MultiQueryRetriever.from_llm(
+        #   retriever =  retriever,
+        #   llm = llm,
+        # )
+
+        # q = "느린 학습자의 검사 방법에 대해 알려주세요."
+        # relevant_docs = mq_retriever.get_relevant_documents(q)
+        # st.write(relevant_docs)
+        
         # Retrieve documents based on user input
         retrieved_docs = retriever.invoke(user_input)
         # Format the retrieved documents as context
@@ -327,5 +331,20 @@ if 'llm' in globals() and llm:
             "question": user_input
         }
 
+        # Set LLM Cache
+        set_llm_cache(InMemoryCache())
+        
+        # Create a new conversation chain
+        conversation = ConversationChain(
+          llm = llm,
+          memory = ConversationBufferWindowMemory(k=3),
+          verbose = True,
+        )
+        
+        #Create the Final Chain
+        chain = prompt | llm | parser
+        
         with st.chat_message("ai"):
             response = chain.invoke(inputs)
+        if selected_model == "Google-Gemma-2":
+          send_message(response, 'ai')
