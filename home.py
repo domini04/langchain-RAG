@@ -110,6 +110,17 @@ prompt =  ChatPromptTemplate.from_messages( #TODO : 추후 퓨샷 템플릿으�
   ]
 )
 
+# from langchain_core.messages import SystemMessage
+# from langchain_core.prompts import HumanMessagePromptTemplate
+
+# prompt = ChatPromptTemplate.from_messages(
+#     [
+#         ("system", """당신은 느린 학습자 관련 교육 전문가입니다. 당신은 느린 학습자 관련 질문을 받고, 이에 대한 전문적인 답변을 제공합니다.
+#           아래 컨텍스트만을 사용하여 질문에 답변하십시오. 답을 모르면 "모르겠습니다. 느린 학습자에 관한 질문만 답변해주세요"라고 답변하세요. 답을 지어내지 마세요.
+#           컨텍스트: {context}""" ),
+#         ("ai", "안녕하세요, 느린 학습자에 대한 질문을 해주세요.")
+#     ]
+# )
 
 
 # Initialize the text splitter
@@ -134,13 +145,35 @@ embeddings_model = HuggingFaceEmbeddings(
 
 
 #OutputParer
+#TODO : PydanticOutputParser를 사용한 출력 형식 지정 -> 추후 보고서 등 명확한 출력 형식이 필요한 경우 사용.
+# from langchain.schema import BaseOutputParser
+# class NewLineOutputParser(BaseOutputParser): 
+#     def parse(self, output):
+#         #'\n' -> '  \n'으로 변환
+#         return output.replace('\n', '  \n')
+# parser = NewLineOutputParser()
+
 from langchain.schema import BaseOutputParser
 
-class NewLineOutputParser(BaseOutputParser): #TODO : PydanticOutputParser를 사용한 출력 형식 지정 -> 추후 보고서 등 명확한 출력 형식이 필요한 경우 사용.
-    def parse(self, output):
-        #'\n' -> '  \n'으로 변환
-        return output.replace('\n', '  \n')
-parser = NewLineOutputParser()
+class LastPartOutputParser(BaseOutputParser):
+    def parse(self, output: str) -> str:
+        # Split the output by 'AI:' to find the last relevant part
+        parts = output.split("answer:")
+        if len(parts) > 1:
+            # The last part is the valid answer
+            final_answer = parts[-1].strip()
+        else:
+            # If there is no 'AI:', return the whole output
+            final_answer = output.strip()
+        
+        # Replace '\n' with '  \n' in the final answer
+        formatted_answer = final_answer.replace('\n', '  \n')
+        
+        return formatted_answer
+
+# Instantiate the parser
+parser = LastPartOutputParser()
+
 
 @st.cache_data(show_spinner="파일 임베딩 중...") #TODO: 파일이 임베딩 된 이후, streamlit에서 해당 파일을 제거하는 처리 필요
 def process_and_embed_file(file): 
@@ -185,8 +218,8 @@ def process_and_embed_file(file):
 
 def format_documents(docs):
     # Debugging: Log document content and type
-    for doc in docs:
-        print(f"Document Content: {doc.page_content}")
+    for i, doc in eumerate(docs):
+        print(f"Document Content {i}: {doc.page_content}")
         
     return "\n\n".join([doc.page_content for doc in docs])
   
@@ -211,35 +244,6 @@ with st.sidebar:
     retriever =  vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 3})
     
 
-# Streamlit UI
-# with st.sidebar:
-#   st.title("PDF to FAISS Embedding")
-
-#   if 'embedded' not in st.session_state:
-#     st.session_state['embedded'] = False
-  
-#   file = st.file_uploader("PDF 파일을 업로드 해주세요", type=["pdf"])
-
-#   if file and not st.session_state['embedded']:
-#     file_path = os.path.join(UPLOADS_DIR, file.name)
-#     with open(file_path, 'wb') as f:
-#       f.write(file.read())
-    
-#     vectorstore = process_and_embed_file(file_path)
-    
-#     st.success(f"업로드한 파일 '{file.name}' 이 성공적으로 임베딩 되었습니다.")
-#     st.session_state['embedded'] = True  # Mark as embedded
-    
-#     # Remove the uploaded file from the UI and state
-#     st.session_state.pop('file_uploader', None)
-#     os.remove(file_path)  # Optional: delete the file from the server
-
-#   elif not file and not st.session_state['embedded']:
-#     vectorstore = FAISS.load_local(os.path.join(CACHE_DIR, "combined_index"), embeddings_model, allow_dangerous_deserialization=True)
-#     st.success("FAISS 인덱스가 성공적으로 로드되었습니다.")
-  
-#   retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 3})
-
 
 #Callback Handler 설정
 from langchain_core.callbacks.base import BaseCallbackHandler
@@ -252,6 +256,7 @@ class ChatCallbackHandler(BaseCallbackHandler):
     
   def on_llm_end(self, *args, **kwargs):
     save_message(self.message, 'ai')
+    # pass
     
   def on_llm_new_token(self, token, *args, **kwargs):
     # print(f"LLM 토큰 생성: {token}")
@@ -303,6 +308,12 @@ if selected_model != "Openai-GPT-4o" or (selected_model == "Openai-GPT-4o" and '
     model_params={"api_key": openai_api_key} if selected_model == "Openai-GPT-4o" else {}
   )
   
+  #Mulit-Query Retriever용 LLM 객체 생성. TODO: Gemma-2 사용시 대응 필요
+  query_llm = ChatOpenAI(
+    model="gpt-4o",
+    api_key=openai_api_key,
+  )
+  
 # LLM integration with chat history
 if 'llm' in globals() and llm:
     paint_history()
@@ -310,22 +321,23 @@ if 'llm' in globals() and llm:
         # Save and display user input
         send_message(user_input, 'user')
         
-        #TODO : Multi-Query Retriever 구현 -> 현재는 단일 리트리버만 지원
         # #Multi-Query Retriever 구현
-        # from langchain.retrievers.multi_query import MultiQueryRetriever
-        # mq_retriever = MultiQueryRetriever.from_llm(
-        #   retriever =  retriever,
-        #   llm = llm,
-        # )
+        from langchain.retrievers.multi_query import MultiQueryRetriever
+        mq_retriever = MultiQueryRetriever.from_llm(
+          retriever =  retriever,
+          llm = query_llm,
+        )
 
-        # q = "느린 학습자의 검사 방법에 대해 알려주세요."
-        # relevant_docs = mq_retriever.get_relevant_documents(q)
-        # st.write(relevant_docs)
+        retrieved_docs = mq_retriever.invoke(user_input)
+        # st.write(retrieved_docs) #디버깅용
         
-        # Retrieve documents based on user input
-        retrieved_docs = retriever.invoke(user_input)
-        # Format the retrieved documents as context
+        # #일반 Retriever 사용
+        # # Retrieve documents based on user input
+        # retrieved_docs = retriever.invoke(user_input)
+        
+        # # Format the retrieved documents as context
         context = format_documents(retrieved_docs)
+        
         # Prepare inputs for the LLM
         inputs = {
             "context": context,
@@ -347,14 +359,15 @@ if 'llm' in globals() and llm:
         
         with st.chat_message("ai"):
             response = chain.invoke(inputs)
-        if selected_model == "Google-Gemma-2":
-          send_message(response, 'ai')
+            save_message(response, 'ai')
+        # if selected_model == "Google-Gemma-2":
+        #   send_message(response, 'ai')
           
           
-if __name__ == "main":
-  import os
-  os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-  import torch
-  import torch.multiprocessing as mp
-  device = 'cuda' if torch.cuda.is_available() else 'cpu'
-  mp.multiprocessing.set_start_method('spawn', force=True)
+# if __name__ == "main":
+#   import os
+#   os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+#   import torch
+#   import torch.multiprocessing as mp
+#   device = 'cuda' if torch.cuda.is_available() else 'cpu'
+#   mp.multiprocessing.set_start_method('spawn', force=True)
