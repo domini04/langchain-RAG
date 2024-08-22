@@ -86,7 +86,7 @@ st.title('RAG 시스템')
 # 모델 선택 및 API Key 입력(필요시)
 st.subheader('느린학습자 관련 RAG')
 st.markdown("업로드된 PDF 파일 내용에 국한된 답변을 생성하는 RAG 시스템입니다.")
-selected_model = st.sidebar.selectbox('LLM 모델을 선택하세요', ['Openai-GPT-4o', 'Google-Gemma-2', ], key='selected_model')
+selected_model = st.sidebar.selectbox('LLM 모델을 선택하세요', ['Openai-GPT-4o', 'Google-Gemma-2', '테스트' ], key='selected_model')
 if selected_model == 'Openai-GPT-4o':
     with st.sidebar:
         openai_api_key = st.text_input('Openai API Key를 입력해주세요')
@@ -106,10 +106,10 @@ prompt =  ChatPromptTemplate.from_messages( #TODO : 추후 퓨샷 템플릿으�
     ("system", """당신은 느린 학습자 관련 교육 전문가입니다. 당신은 느린 학습자 관련 질문을 받고, 이에 대한 전문적인 답변을 제공합니다.
              아래 컨텍스트만을 사용하여 질문에 답변하십시오. 답을 모르면 "모르겠습니다. 느린 학습자에 관한 질문만 답변해주세요"라고 답변하세요. 답을 지어내지 마세요.
         컨텍스트: {context}"""),
-    ("ai", "안녕하세요! 느린 학습자와 관련해서 어떤 사항이 궁금하신가요?"),
     ("human", "{question}"),
   ]
 )
+
 
 
 # Initialize the text splitter
@@ -285,12 +285,13 @@ class LLMManager:
           model_id="google/gemma-2-2b-it",
           task="text-generation",
           verbose=True,
-          device_map='auto',
+          # device_map='auto',
+          device=None,
+          device_map=None,
+          model_kwargs={"device_map": "auto"},
           callbacks=[ChatCallbackHandler()],
           pipeline_kwargs={"max_new_tokens": 1000},
         ) 
-
-      # Add more model initialization as needed
 
     return LLMManager._instance
 
@@ -348,3 +349,12 @@ if 'llm' in globals() and llm:
             response = chain.invoke(inputs)
         if selected_model == "Google-Gemma-2":
           send_message(response, 'ai')
+          
+          
+if __name__ == "main":
+  import os
+  os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+  import torch
+  import torch.multiprocessing as mp
+  device = 'cuda' if torch.cuda.is_available() else 'cpu'
+  mp.multiprocessing.set_start_method('spawn', force=True)
