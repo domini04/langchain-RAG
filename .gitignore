@@ -7,3 +7,4 @@ uploads/*
 gpu_test.py
 cache_backup/*
 테스트파일2
+demo.py

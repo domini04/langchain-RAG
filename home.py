@@ -86,7 +86,7 @@ st.title('RAG 시스템')
 # 모델 선택 및 API Key 입력(필요시)
 st.subheader('느린학습자 관련 RAG')
 st.markdown("업로드된 PDF 파일 내용에 국한된 답변을 생성하는 RAG 시스템입니다.")
-selected_model = st.sidebar.selectbox('LLM 모델을 선택하세요', ['Openai-GPT-4o', 'Google-Gemma-2', '테스트' ], key='selected_model')
+selected_model = st.sidebar.selectbox('LLM 모델을 선택하세요', ['Openai-GPT-4o', 'Google-Gemma-2' ], key='selected_model')
 if selected_model == 'Openai-GPT-4o':
     with st.sidebar:
         openai_api_key = st.text_input('Openai API Key를 입력해주세요')
@@ -104,24 +104,13 @@ from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 prompt =  ChatPromptTemplate.from_messages( #TODO : 추후 퓨샷 템플릿으로 변경
   [
     ("system", """당신은 느린 학습자 관련 교육 전문가입니다. 당신은 느린 학습자 관련 질문을 받고, 이에 대한 전문적인 답변을 제공합니다.
-             아래 컨텍스트만을 사용하여 질문에 답변하십시오. 답을 모르면 "모르겠습니다. 느린 학습자에 관한 질문만 답변해주세요"라고 답변하세요. 답을 지어내지 마세요.
+             아래 컨텍스트만을 사용하여 질문에 답변하십시오. 답을 지어내지 마세요. 답을 모르면 "모르겠습니다. 느린 학습자에 관한 질문만 질문해주세요" 혹은 "위 질문에 대해 답변할 정보가 부족합니다".
+             라고 알맞게 답변하세요.
         컨텍스트: {context}"""),
+    ("ai", "안녕하세요, 느린 학습자에 대해 어떤 사항이 궁금하신가요?"),
     ("human", "{question}"),
   ]
 )
-
-# from langchain_core.messages import SystemMessage
-# from langchain_core.prompts import HumanMessagePromptTemplate
-
-# prompt = ChatPromptTemplate.from_messages(
-#     [
-#         ("system", """당신은 느린 학습자 관련 교육 전문가입니다. 당신은 느린 학습자 관련 질문을 받고, 이에 대한 전문적인 답변을 제공합니다.
-#           아래 컨텍스트만을 사용하여 질문에 답변하십시오. 답을 모르면 "모르겠습니다. 느린 학습자에 관한 질문만 답변해주세요"라고 답변하세요. 답을 지어내지 마세요.
-#           컨텍스트: {context}""" ),
-#         ("ai", "안녕하세요, 느린 학습자에 대한 질문을 해주세요.")
-#     ]
-# )
-
 
 # Initialize the text splitter
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -218,7 +207,7 @@ def process_and_embed_file(file):
 
 def format_documents(docs):
     # Debugging: Log document content and type
-    for i, doc in eumerate(docs):
+    for i, doc in enumerate(docs):
         print(f"Document Content {i}: {doc.page_content}")
         
     return "\n\n".join([doc.page_content for doc in docs])
@@ -266,7 +255,7 @@ class ChatCallbackHandler(BaseCallbackHandler):
 
 #TODO : Reranker 추가 필요
 
-#TODO : 싱글턴 방식의 llm 객체 생성 방식 변경 필요
+#TODO : 싱글턴 방식의 llm 객체 생성 방식 변경 필요(완료)
 class LLMManager:
   _instance = None
 
@@ -287,7 +276,7 @@ class LLMManager:
         )
       elif model_name == "Google-Gemma-2":
         LLMManager._instance = HuggingFacePipeline.from_model_id(
-          model_id="google/gemma-2-2b-it",
+          model_id="google/gemma-2-2b",
           task="text-generation",
           verbose=True,
           # device_map='auto',
@@ -298,6 +287,16 @@ class LLMManager:
           pipeline_kwargs={"max_new_tokens": 1000},
         ) 
 
+        # # Set LLM Cache
+        # set_llm_cache(InMemoryCache())
+        
+        # # Create a new conversation chain
+        # conversation = ConversationChain(
+        #   llm = llm,
+        #   memory = ConversationBufferWindowMemory(k=3),
+        #   verbose = True,
+        # )
+      
     return LLMManager._instance
 
 #LLM 초기화
@@ -309,10 +308,12 @@ if selected_model != "Openai-GPT-4o" or (selected_model == "Openai-GPT-4o" and '
   )
   
   #Mulit-Query Retriever용 LLM 객체 생성. TODO: Gemma-2 사용시 대응 필요
-  query_llm = ChatOpenAI(
-    model="gpt-4o",
-    api_key=openai_api_key,
-  )
+  
+  # api_key = os.getenv("openai_api_key")
+  # query_llm = ChatOpenAI(
+  #   model="gpt-4o",
+  #   api_key=api_key,
+  # )
   
 # LLM integration with chat history
 if 'llm' in globals() and llm:
@@ -322,18 +323,18 @@ if 'llm' in globals() and llm:
         send_message(user_input, 'user')
         
         # #Multi-Query Retriever 구현
-        from langchain.retrievers.multi_query import MultiQueryRetriever
-        mq_retriever = MultiQueryRetriever.from_llm(
-          retriever =  retriever,
-          llm = query_llm,
-        )
+        # from langchain.retrievers.multi_query import MultiQueryRetriever
+        # mq_retriever = MultiQueryRetriever.from_llm(
+        #   retriever =  retriever,
+        #   llm = query_llm,
+        # )
 
-        retrieved_docs = mq_retriever.invoke(user_input)
+        # retrieved_docs = mq_retriever.invoke(user_input)
         # st.write(retrieved_docs) #디버깅용
         
-        # #일반 Retriever 사용
-        # # Retrieve documents based on user input
-        # retrieved_docs = retriever.invoke(user_input)
+        #일반 Retriever 사용
+        # Retrieve documents based on user input
+        retrieved_docs = retriever.invoke(user_input)
         
         # # Format the retrieved documents as context
         context = format_documents(retrieved_docs)
@@ -344,15 +345,7 @@ if 'llm' in globals() and llm:
             "question": user_input
         }
 
-        # Set LLM Cache
-        set_llm_cache(InMemoryCache())
-        
-        # Create a new conversation chain
-        conversation = ConversationChain(
-          llm = llm,
-          memory = ConversationBufferWindowMemory(k=3),
-          verbose = True,
-        )
+
         
         #Create the Final Chain
         chain = prompt | llm | parser
@@ -360,8 +353,8 @@ if 'llm' in globals() and llm:
         with st.chat_message("ai"):
             response = chain.invoke(inputs)
             save_message(response, 'ai')
-        # if selected_model == "Google-Gemma-2":
-        #   send_message(response, 'ai')
+        if selected_model == "Google-Gemma-2":
+          send_message(response, 'ai')
           
           
 # if __name__ == "main":
