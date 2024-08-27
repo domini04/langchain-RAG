@@ -19,7 +19,15 @@ import uuid
 from datetime import datetime, timedelta
 from langchain_community.llms import HuggingFacePipeline
 from langchain_community.llms.vllm import VLLM
-from transformers import AutoTokenizer, AutoModelForCausalLM
+
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.chat_history import (
+    BaseChatMessageHistory,
+    InMemoryChatMessageHistory,
+)
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_core.messages import AIMessage, HumanMessage
+
 
 #환경설정
 ENV_PATH = './.env'
@@ -34,43 +42,34 @@ os.makedirs(UPLOADS_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 
-#I. Streamlit 관련
+#I. Streamlit 세션 관리
 # Step 1: Generate a unique identifier for each user
-user_id = str(uuid.uuid4())
-st.session_state['user_id'] = user_id
-
-# Step 2: Initialize chat history and timestamp for the user
+if 'user_id' not in st.session_state:
+  user_id = str(uuid.uuid4())
+  st.session_state['user_id'] = user_id
+else:
+  user_id = st.session_state['user_id']
+  
+# Step 2: Initialize chat history and timestamp for the user if they don't exist
 if 'chat_history' not in st.session_state:
-    st.session_state['chat_history'] = {}
+  st.session_state['chat_history'] = {}
+
 if 'last_activity' not in st.session_state:
-    st.session_state['last_activity'] = {}
+  st.session_state['last_activity'] = {}
 
-st.session_state['chat_history'][user_id] = []
-st.session_state['last_activity'][user_id] = datetime.now()  # Initialize timestamp
+if user_id not in st.session_state['chat_history']:
+  st.session_state['chat_history'][user_id] = []
 
-# Step 3: Function to clean up inactive sessions
-def cleanup_sessions(timeout_minutes=60): #마지막 활동 시간이 timeout_minutes 이상인 사용자 세션 제거
-    current_time = datetime.now()
-    inactive_users = []
-    
-    # Identify inactive users
-    for user, last_active in st.session_state['last_activity'].items():
-        if current_time - last_active > timedelta(minutes=timeout_minutes):
-            inactive_users.append(user)
-    
-    # Remove inactive users' sessions
-    for user in inactive_users:
-        del st.session_state['chat_history'][user]
-        del st.session_state['last_activity'][user]
-
-# Call the cleanup function to remove old sessions
-cleanup_sessions(timeout_minutes=60) #TODO : 주기적 세션 정리 필요
+if user_id not in st.session_state['last_activity']:
+  st.session_state['last_activity'][user_id] = datetime.now()  # Initialize timestamp
+  
+#TODO : 주기적 세션 정리 필요
 
 # Step 4: Functions to save and send messages
 def save_message(message, role):
-    st.session_state['chat_history'][user_id].append((role, message))
-    st.session_state['last_activity'][user_id] = datetime.now()  # 메시지 보낼 경우, 마지막 활동 시간 업데이트
-
+  st.session_state['chat_history'][user_id].append((role, message))
+  st.session_state['last_activity'][user_id] = datetime.now()  # 메시지 보낼 경우, 마지막 활동 시간 업데이트
+  
 def send_message(message, role, save=True):
     with st.chat_message(role):
         st.markdown(message)
@@ -107,6 +106,7 @@ prompt =  ChatPromptTemplate.from_messages( #TODO : 추후 퓨샷 템플릿으�
              아래 컨텍스트만을 사용하여 질문에 답변하십시오. 답을 지어내지 마세요. 답을 모르면 "모르겠습니다. 느린 학습자에 관한 질문만 질문해주세요" 혹은 "위 질문에 대해 답변할 정보가 부족합니다".
              라고 알맞게 답변하세요.
         컨텍스트: {context}"""),
+    MessagesPlaceholder(variable_name="messages"),
     ("ai", "안녕하세요, 느린 학습자에 대해 어떤 사항이 궁금하신가요?"),
     ("human", "{question}"),
   ]
@@ -207,8 +207,8 @@ def process_and_embed_file(file):
 
 def format_documents(docs):
     # Debugging: Log document content and type
-    for i, doc in enumerate(docs):
-        print(f"Document Content {i}: {doc.page_content}")
+    # for i, doc in enumerate(docs):
+        # print(f"Document Content {i}: {doc.page_content}")
         
     return "\n\n".join([doc.page_content for doc in docs])
   
@@ -315,10 +315,27 @@ if selected_model != "Openai-GPT-4o" or (selected_model == "Openai-GPT-4o" and '
   #   api_key=api_key,
   # )
   
+#Message History 구현 관련
+
+store = {}
+
+def get_session_history(session_id: str) -> BaseChatMessageHistory:
+    if session_id not in store:
+        store[session_id] = InMemoryChatMessageHistory()
+    return store[session_id]
+  
+config = {"configurable" : {"session_id": user_id}}
+
+#TODO: trim_messages를 사용한 메시지 히스토리 관리 필요 -> trimmer의 체인 연결  
+  
 # LLM integration with chat history
 if 'llm' in globals() and llm:
     paint_history()
     if user_input := st.chat_input("질문을 입력하세요"):
+        #add user input to the history
+        user_inputs = st.session_state['chat_history'][user_id]
+        # user_inputs.append(user_input)
+      
         # Save and display user input
         send_message(user_input, 'user')
         
@@ -342,19 +359,25 @@ if 'llm' in globals() and llm:
         # Prepare inputs for the LLM
         inputs = {
             "context": context,
-            "question": user_input
+            "question": user_input,
+            "messages": user_inputs,
         }
-
-
         
         #Create the Final Chain
         chain = prompt | llm | parser
         
+        with_message_history = RunnableWithMessageHistory(
+          chain,
+          get_session_history,
+          input_messages_key= "messages",
+        )
+        
         with st.chat_message("ai"):
-            response = chain.invoke(inputs)
-            save_message(response, 'ai')
-        if selected_model == "Google-Gemma-2":
-          send_message(response, 'ai')
+            # response = chain.invoke(inputs)
+            response =  with_message_history.invoke(inputs, config=config)
+            # save_message(response, 'ai')
+        # if selected_model == "Google-Gemma-2":
+        #   send_message(response, 'ai')
           
           
 # if __name__ == "main":
