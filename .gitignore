@@ -8,3 +8,5 @@ gpu_test.py
 cache_backup/*
 테스트파일2
 demo.py
+chunking.ipynb
+demo2.py
