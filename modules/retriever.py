@@ -1,5 +1,4 @@
-# retriever_module.py
-
+# retriever 모듈화
 import os
 import faiss
 from langchain_community.vectorstores import FAISS
@@ -74,3 +73,12 @@ def format_documents(docs: list) -> str:
 # Function to create a retriever from FAISS
 def create_retriever(vector_store: FAISS):
     return vector_store.as_retriever(search_type="mmr", search_kwargs={"k": 5})
+
+
+#TODO: llm.py에서 llm을 불러와 mq retriever 구현
+        # #Multi-Query Retriever 구현
+        # from langchain.retrievers.multi_query import MultiQueryRetriever
+        # mq_retriever = MultiQueryRetriever.from_llm(
+        #   retriever =  retriever,
+        #   llm = query_llm,
+        # )
