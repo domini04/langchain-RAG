@@ -9,6 +9,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # Environment setup
 CACHE_DIR = './cache'
 UPLOADS_DIR = "./uploads"
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 # Ensure directories exist
 os.makedirs(UPLOADS_DIR, exist_ok=True)
@@ -62,7 +63,8 @@ def process_and_embed_file(file) -> FAISS:
 
 # Function to load vectorstore from cache
 def load_vectorstore_from_cache(filename: str) -> FAISS:
-    cache_path = os.path.join(CACHE_DIR, filename)
+    # Construct an absolute path to the cache directory
+    cache_path = os.path.join(PROJECT_ROOT, 'cache', filename)
     vector_store = FAISS.load_local(cache_path, embeddings_model, allow_dangerous_deserialization=True)
     return vector_store
 
