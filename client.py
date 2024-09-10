@@ -6,11 +6,11 @@ import uuid
 session_id = str(123)
 
 # Define the API URL
-url = "http://localhost:8000/rag-system"
+url = "http://localhost:8000/ask"
 
 # The input data for the API request
 data = {
-    "question": "내 이름이 뭐라고 했지?",  # Example question
+    "question": "내 이름은 엽이라고 해",  # Example question
     "session_id": session_id  # Use the generated session ID
 }
 
