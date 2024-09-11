@@ -9,6 +9,10 @@ from langchain_core.callbacks.base import BaseCallbackHandler
 import streamlit as st
 import datetime
 
+def save_message(message, role):
+  st.session_state['chat_history'][user_id].append((role, message))
+  st.session_state['last_activity'][user_id] = datetime.now()  # 메시지 보낼 경우, 마지막 활동 시간 업데이트
+
 
 # Callback Handler for LLM
 class ChatCallbackHandler(BaseCallbackHandler):
@@ -42,7 +46,7 @@ class LLMManager:
                     verbose=True,
                     max_tokens=1500,
                     streaming=True,
-                    callbacks=[ChatCallbackHandler()],
+                    # callbacks=[ChatCallbackHandler()], #Streamlit 버전 사용시에는 CallbackHandler 사용
                 )
             elif model_name == "Google-Gemma-2":
                 LLMManager._instance = HuggingFacePipeline.from_model_id(

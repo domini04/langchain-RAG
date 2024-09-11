@@ -127,7 +127,7 @@ class LLMRequest(BaseModel):
 
 # Define API to handle chain requests
 @app.post("/api")
-async def rag_system(request: LLMRequest, background_tasks: BackgroundTasks, api_key: str = Header(...)):
+async def invoke_llm(request: LLMRequest, background_tasks: BackgroundTasks, api_key: str = Header(...)):
     # Validate API token
     print(f"API Key: {api_key}")
     print(f"API Token: {api_token}")
@@ -176,7 +176,13 @@ async def rag_system(request: LLMRequest, background_tasks: BackgroundTasks, api
     validated_response = QuestionRequest(session_id=session_id, question=user_input, answer=ai_response)
 
     return validated_response.dict()  # Return the validated response as a dictionary
-    
+
+from langchain.chat_models import ChatOpenAI
+add_routes(
+    app,
+    ChatOpenAI(model="gpt-4o"),
+    path="/openai",
+)
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
